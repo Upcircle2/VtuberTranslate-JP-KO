@@ -1,0 +1,45 @@
+name: VtuberTranslate
+options:
+  bundleIdPrefix: com.sswv
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    GENERATE_INFOPLIST_FILE: NO
+packages:
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio.git
+    from: "0.15.0"
+targets:
+  VtuberTranslate:
+    type: application
+    platform: macOS
+    dependencies:
+      - package: FluidAudio
+    sources:
+      - path: Sources
+      - path: Resources
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sswv.VtuberTranslate
+        PRODUCT_NAME: VtuberTranslate
+        CODE_SIGN_IDENTITY: "VtuberTranslate Dev"
+        CODE_SIGN_STYLE: Manual
+        PROVISIONING_PROFILE_SPECIFIER: ""
+        ENABLE_HARDENED_RUNTIME: NO
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: Vtuber 자막
+        CFBundleName: VtuberTranslate
+        LSMinimumSystemVersion: "26.0"
+        NSHighResolutionCapable: true
+        NSPrincipalClass: NSApplication
+        LSApplicationCategoryType: public.app-category.utilities
+        NSSpeechRecognitionUsageDescription: "방송 음성을 인식하여 자막으로 번역하기 위해 음성 인식을 사용합니다."

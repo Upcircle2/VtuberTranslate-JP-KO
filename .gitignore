@@ -1,0 +1,27 @@
+# Xcode / Swift
+build/
+DerivedData/
+
+# XcodeGen이 project.yml에서 생성하므로 추적하지 않음
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+*.xcuserstate
+*.moved-aside
+.swiftpm/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# 빌드 산출물 / 임시
+*.app
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# 비밀/로컬
+*.p12
+*.cer
+secrets/

@@ -1,0 +1,96 @@
+import Foundation
+
+/// 번들에 포함된 VTuber 고유명사/슬랭 사전을 읽어, 번역 직전에 일본어 표기를
+/// 한국어 정식 표기로 치환한다. 이렇게 하면 Apple 번역기의 들쭉날쭉한 음역 대신
+/// 우리가 지정한 이름/별명이 그대로 출력된다(바이어싱 불가의 실질 해법).
+final class GlossaryCorrector {
+    private struct NamePart: Decodable { let jp: String; let ko: String }
+    private struct Entry: Decodable {
+        let jp: String
+        let ko: String
+        let aliases_jp: [String]?
+        let aliases_ko: [String]?
+        let kind: String?
+        let group: String?
+        let surname: NamePart?
+        let given: NamePart?
+    }
+    private struct File: Decodable { let entries: [Entry] }
+
+    /// (일본어 형태, 한국어 치환) 쌍을 긴 것부터 정렬 — 최장 일치 우선.
+    private let replacements: [(jp: String, ko: String)]
+
+    /// STT 커스텀 어휘(바이어싱)용 일본어 이름 형태 목록(이름 전체+성+이름+별칭).
+    /// 치환과 달리 과매칭 부담이 없어 성씨도 포함한다.
+    let nameVocabulary: [String]
+
+    /// 3글자 이상이라 길이 필터를 통과하지만, 치환하면 흔한 단어를 깨뜨리는 일반어/직함.
+    private static let unsafeAliases: Set<String> = [
+        "そら", "おじょ", "宮さん", "青くん", "あおくん", "助手くん", "中の人", "前世", "本体",
+    ]
+
+    /// 별명을 치환에 써도 되는지: 3글자 이상이거나, 2글자이면서 카타카나만(과매칭 위험 낮음).
+    private static func isSafeAlias(_ s: String) -> Bool {
+        if Self.unsafeAliases.contains(s) { return false }
+        if s.count >= 3 { return true }
+        if s.count == 2 {
+            return s.unicodeScalars.allSatisfy { (0x30A0...0x30FF).contains($0.value) }
+        }
+        return false
+    }
+
+    init(resourceName: String = "vtuber_glossary") {
+        guard let url = Bundle.main.url(forResource: resourceName, withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let file = try? JSONDecoder().decode(File.self, from: data) else {
+            replacements = []
+            nameVocabulary = []
+            return
+        }
+        // 이름(고유명사)만 번역-전 치환에 쓴다. 슬랭/일반어는 과매칭·뜻풀이 문제로 제외.
+        var map: [String: String] = [:]
+        var vocab = Set<String>()
+        for entry in file.entries where (entry.kind ?? "name") == "name" {
+            let ko = entry.ko.trimmingCharacters(in: .whitespaces)
+            guard !ko.isEmpty else { continue }
+
+            // ── 번역 치환 맵: 정식 표기 + 안전한 별명 + 안전한 이름(given). 성씨는 제외(과매칭).
+            var pairs: [(String, String)] = [(entry.jp.trimmingCharacters(in: .whitespaces), ko)]
+            for alias in entry.aliases_jp ?? [] {
+                let a = alias.trimmingCharacters(in: .whitespaces)
+                if Self.isSafeAlias(a) { pairs.append((a, ko)) }
+            }
+            if let given = entry.given, Self.isSafeAlias(given.jp) {
+                pairs.append((given.jp, given.ko))
+            }
+            for (form, value) in pairs where !form.isEmpty && map[form] == nil {
+                map[form] = value
+            }
+
+            // ── 커스텀 어휘: 이름 전체 + 성 + 이름 + 모든 별칭(2글자 이상). 과매칭 부담 없음.
+            var forms = [entry.jp]
+            if let surname = entry.surname { forms.append(surname.jp) }
+            if let given = entry.given { forms.append(given.jp) }
+            forms.append(contentsOf: entry.aliases_jp ?? [])
+            for form in forms {
+                let f = form.trimmingCharacters(in: .whitespaces)
+                if f.count >= 2 { vocab.insert(f) }
+            }
+        }
+        // 긴 형태부터 치환해야 "兎田ぺこら"가 "ぺこら"보다 먼저 잡힌다.
+        replacements = map.sorted { $0.key.count > $1.key.count }.map { ($0.key, $0.value) }
+        nameVocabulary = Array(vocab)
+    }
+
+    var isEmpty: Bool { replacements.isEmpty }
+
+    /// 일본어 텍스트의 알려진 고유명사/슬랭을 한국어로 치환해 번역기에 넘길 형태로 만든다.
+    func localize(_ text: String) -> String {
+        guard !replacements.isEmpty, !text.isEmpty else { return text }
+        var result = text
+        for (jp, ko) in replacements where result.contains(jp) {
+            result = result.replacingOccurrences(of: jp, with: ko)
+        }
+        return result
+    }
+}
