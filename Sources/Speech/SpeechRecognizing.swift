@@ -8,6 +8,7 @@ import CoreMedia
 struct TranscriptionUpdate: Sendable {
     let text: String
     let confirmedCharCount: Int
+    var confidence: Double = 1.0      // 평균 인식 신뢰도(환각 필터용). 미지원 엔진은 1.0.
 }
 
 /// 음성 인식 엔진 추상화. 지금은 Apple 온디바이스 구현만 있지만,

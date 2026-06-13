@@ -34,9 +34,11 @@ final class Collector {
             }
         }
         prevText = u.text; prevCC = u.confirmedCharCount
+        minConfidence = min(minConfidence, u.confidence)
         events.append((t, u.text, u.confirmedCharCount))
-        logf("[\(fmt(t))s] cc=\(u.confirmedCharCount)  \(u.text)")
+        logf("[\(fmt(t))s] cc=\(u.confirmedCharCount) conf=\(String(format: "%.2f", u.confidence))  \(u.text)")
     }
+    private(set) var minConfidence = 1.0
 }
 
 let args = CommandLine.arguments
@@ -84,7 +86,7 @@ let finalText = collector.events.last?.text ?? ""
 let localizedFinal = glossary.localize(finalText)
 
 log("=== RESULT ===")
-log("updates: \(collector.events.count) | clears: \(collector.clears) | flickers: \(collector.flickers) (낮을수록 매끄러움)")
+log("updates: \(collector.events.count) | clears: \(collector.clears) | flickers: \(collector.flickers) | min-conf: \(String(format: "%.2f", collector.minConfidence))")
 if let ft = collector.firstTokenTime { log("latency-first-token: \(String(format: "%.2f", ft))s") }
 if let fc = collector.firstConfirmedTime { log("latency-first-confirmed: \(String(format: "%.2f", fc))s") }
 log("final-text: \(finalText)")

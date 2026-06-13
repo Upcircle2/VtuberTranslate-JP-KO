@@ -30,6 +30,7 @@ final class AppleSpeechRecognizer: SpeechRecognizing {
 
     // 자막 라인 리셋(클리어) 조건
     private let maxLineChars = 70                 // 이보다 길어지면 다음 발화에서 비움(2줄 UI가 축소로 흡수 가능한 선)
+    private let confidenceThreshold = 0.80        // 이 미만 신뢰도는 환각으로 보고 무시(무발화 잡음 차단)
     private var pendingClear = false
     private static let sentenceEnders: Set<Character> = ["。", "．", ".", "！", "!", "？", "?", "…"]
 
@@ -76,7 +77,7 @@ final class AppleSpeechRecognizer: SpeechRecognizing {
             locale: locale,
             transcriptionOptions: [],
             reportingOptions: [.volatileResults, .fastResults],
-            attributeOptions: [.audioTimeRange]
+            attributeOptions: [.audioTimeRange, .transcriptionConfidence]
         )
         self.transcriber = transcriber
 
@@ -112,7 +113,8 @@ final class AppleSpeechRecognizer: SpeechRecognizing {
             do {
                 for try await result in transcriber.results {
                     self?.handleResult(text: String(result.text.characters),
-                                       start: result.range.start.seconds)
+                                       start: result.range.start.seconds,
+                                       confidence: Self.averageConfidence(result.text))
                 }
             } catch {
                 // 스트림 종료 또는 오류 — 조용히 끝낸다.
@@ -179,7 +181,11 @@ final class AppleSpeechRecognizer: SpeechRecognizing {
 
     // MARK: 전사 재구성
 
-    private func handleResult(text: String, start: Double) {
+    private func handleResult(text: String, start: Double, confidence: Double) {
+        // 저신뢰 결과(무발화 구간의 환각 가능성)는 무시 → 멀쩡한 줄을 끊지 않는다.
+        // 실제 발화는 신뢰도 ~0.88+ 이라 0.80 임계는 정상 발화를 거의 건드리지 않는다.
+        guard confidence >= confidenceThreshold else { return }
+
         let isNewSegment = segments.last.map { start > $0.start + segmentGapTolerance } ?? true
 
         if isNewSegment {
@@ -213,7 +219,7 @@ final class AppleSpeechRecognizer: SpeechRecognizing {
         lastEmittedFull = full
         maxConfirmedLen = max(maxConfirmedLen, max(committedLen, agreedLen))
         let cc = min(maxConfirmedLen, full.count)
-        onUpdate?(TranscriptionUpdate(text: full, confirmedCharCount: cc))
+        onUpdate?(TranscriptionUpdate(text: full, confirmedCharCount: cc, confidence: confidence))
 
         // 문장이 끝났거나 너무 길어지면, 다음 발화 때 라인을 비우도록 예약(현재 줄은 그대로 보여줌).
         if let lastChar = full.reversed().first(where: { !$0.isWhitespace }),
@@ -246,6 +252,17 @@ final class AppleSpeechRecognizer: SpeechRecognizing {
     }
 
     // MARK: 보조
+
+    private static func averageConfidence(_ attributed: AttributedString) -> Double {
+        var sum = 0.0, count = 0
+        for run in attributed.runs {
+            if let c = run[AttributeScopes.SpeechAttributes.ConfidenceAttribute.self] {
+                sum += c
+                count += 1
+            }
+        }
+        return count == 0 ? 1.0 : sum / Double(count)
+    }
 
     private static func commonPrefixCount(_ a: String, _ b: String) -> Int {
         if a.isEmpty || b.isEmpty { return 0 }
