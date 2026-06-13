@@ -20,7 +20,7 @@ struct SubtitleView: View {
         if !volatile.isEmpty {
             if !confirmed.isEmpty { result += AttributedString(" ") }
             var tail = AttributedString(volatile)
-            tail.foregroundColor = .white.opacity(0.55)
+            tail.foregroundColor = .white      // 진행 중 꼬리도 흐림 없이 또렷한 흰색
             result += tail
         }
         return result
@@ -31,24 +31,25 @@ struct SubtitleView: View {
             if !pipeline.liveSource.isEmpty {
                 Text(pipeline.liveSource)
                     .font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(.white)
                     .lineLimit(1)
                     .truncationMode(.head)
-                    .shadow(color: .black.opacity(0.9), radius: 2)
-                    .shadow(color: .black.opacity(0.6), radius: 1)
             }
 
             Text(translationText)
                 .font(.system(size: 28, weight: .semibold))
                 .lineLimit(2)
                 .minimumScaleFactor(0.6)
-                // 배경 박스 없이 떠 있으므로, 어떤 영상 위에서도 읽히도록 그림자를 겹쳐 외곽선 효과.
-                .shadow(color: .black.opacity(0.95), radius: 3)
-                .shadow(color: .black.opacity(0.8), radius: 1)
+                .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .padding(.horizontal, 24)
         .padding(.vertical, 16)
+        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 20))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20)
+                .strokeBorder(.white.opacity(0.10), lineWidth: 1)
+        )
         .padding(12)
     }
 }
