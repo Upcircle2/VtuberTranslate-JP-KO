@@ -51,6 +51,7 @@ targets:
       - Sources/Speech/SpeechRecognizing.swift
       - Sources/Speech/AppleSpeechRecognizer.swift
       - Sources/Pipeline/GlossaryCorrector.swift
+      - Sources/Pipeline/ConversationalStyle.swift
       - Eval
       - path: Resources
         buildPhase: resources

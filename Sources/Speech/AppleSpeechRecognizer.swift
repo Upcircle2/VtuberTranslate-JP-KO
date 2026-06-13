@@ -24,6 +24,7 @@ final class AppleSpeechRecognizer: SpeechRecognizing {
     private var segments: [Segment] = []
     private var committedCount = 0
     private var lastEmittedFull = ""              // LocalAgreement-2: 직전 가설(공통 접두 확정용)
+    private var maxConfirmedLen = 0               // 확정 경계 단조 증가(후퇴 방지 → 매끄러움)
     private var joinSeparator = ""
     private let segmentGapTolerance = 0.35
 
@@ -179,40 +180,39 @@ final class AppleSpeechRecognizer: SpeechRecognizing {
     // MARK: 전사 재구성
 
     private func handleResult(text: String, start: Double) {
-        // 직전 발화가 끝났으면(종결부호/긴 침묵/길이초과) 새 발화 전에 라인을 비운다.
-        if pendingClear {
-            segments.removeAll()
-            committedCount = 0
-            lastEmittedFull = ""        // LocalAgreement 상태도 새 발화로 리셋
-            pendingClear = false
-        }
+        let isNewSegment = segments.last.map { start > $0.start + segmentGapTolerance } ?? true
 
-        if let last = segments.last {
-            if start > last.start + segmentGapTolerance {
+        if isNewSegment {
+            // 클리어는 '진짜 새 발화'일 때만 — 같은 발화의 개정(종결부호 삽입 등)엔 라인을 유지해 깜빡임 방지.
+            if pendingClear {
+                segments.removeAll()
+                committedCount = 0
+                lastEmittedFull = ""
+                maxConfirmedLen = 0
+                pendingClear = false
+            } else if !segments.isEmpty {
                 committedCount = segments.count            // 직전 세그먼트들 확정
-                segments.append(Segment(start: start, text: text))
-                commitTailRequested = false                // 새 발화 → 보류 커밋 무효화
-            } else {
-                segments[segments.count - 1].text = text   // volatile 꼬리 갱신
-                if commitTailRequested {
-                    committedCount = segments.count         // 무음 감지 → 꼬리까지 확정
-                    commitTailRequested = false
-                }
             }
-        } else {
             segments.append(Segment(start: start, text: text))
             commitTailRequested = false
+        } else {
+            segments[segments.count - 1].text = text       // 같은 발화 갱신(개정 포함)
+            if commitTailRequested {
+                committedCount = segments.count             // 무음 감지 → 꼬리까지 확정
+                commitTailRequested = false
+            }
         }
 
         let full = segments.map(\.text).joined(separator: joinSeparator)
         guard !full.isEmpty else { return }
 
-        // 확정 경계 = (이미 확정된 세그먼트) ∪ (LocalAgreement-2: 직전 가설과 공통 접두).
-        // → 말하는 동안 앞 어절부터 매끄럽게 흰색으로 잠긴다(끝까지 회색이던 문제 해결).
+        // 확정 경계 = 확정 세그먼트 ∪ LocalAgreement-2(직전 가설 공통접두). 발화 내에서 단조 증가
+        // (후퇴하지 않음) → 흰→회 깜빡임 없이 앞 어절부터 매끄럽게 잠긴다.
         let committedLen = segments.prefix(committedCount).map(\.text).joined(separator: joinSeparator).count
         let agreedLen = Self.commonPrefixCount(full, lastEmittedFull)
         lastEmittedFull = full
-        let cc = min(max(committedLen, agreedLen), full.count)
+        maxConfirmedLen = max(maxConfirmedLen, max(committedLen, agreedLen))
+        let cc = min(maxConfirmedLen, full.count)
         onUpdate?(TranscriptionUpdate(text: full, confirmedCharCount: cc))
 
         // 문장이 끝났거나 너무 길어지면, 다음 발화 때 라인을 비우도록 예약(현재 줄은 그대로 보여줌).
@@ -261,6 +261,7 @@ final class AppleSpeechRecognizer: SpeechRecognizing {
         segments.removeAll()
         committedCount = 0
         lastEmittedFull = ""
+        maxConfirmedLen = 0
         pendingClear = false
         firstInputTime = nil
         lastInputTime = .zero

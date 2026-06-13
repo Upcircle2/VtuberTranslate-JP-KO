@@ -29,6 +29,13 @@ final class GlossaryCorrector {
         "そら", "おじょ", "宮さん", "青くん", "あおくん", "助手くん", "中の人", "前世", "本体",
     ]
 
+    /// Apple NMT가 자주 틀리는 VTuber 슬랭. 구별성 높은 3글자+만(과매칭 낮음). 깨끗한 한국어로.
+    private static let safeSlang: [(String, String)] = [
+        ("やばい", "대박"), ("やばすぎ", "완전 대박"), ("てぇてぇ", "너무 소중해"),
+        ("ぽんこつ", "허당"), ("どんまい", "괜찮아"), ("えぐい", "쩐다"),
+        ("おつかれさま", "수고했어"), ("おつかれ", "수고했어"), ("ありがとう", "고마워"),
+    ]
+
     /// 원형 + 가나 변형(히라가나↔가타카나). STT 표기 차이에도 매칭되게 한다.
     private static func kanaVariants(_ s: String) -> [String] {
         var out = [s]
@@ -96,6 +103,13 @@ final class GlossaryCorrector {
                 for variant in Self.kanaVariants(f) { vocab.insert(variant) }
             }
         }
+        // Apple NMT가 자주 오역하는 핵심 슬랭(구별성 높고 과매칭 낮은 것만) 보강.
+        for (jp, ko) in Self.safeSlang {
+            for variant in Self.kanaVariants(jp) where map[variant] == nil {
+                map[variant] = ko
+            }
+        }
+
         // 긴 형태부터 치환해야 "兎田ぺこら"가 "ぺこら"보다 먼저 잡힌다.
         replacements = map.sorted { $0.key.count > $1.key.count }.map { ($0.key, $0.value) }
         nameVocabulary = Array(vocab)
