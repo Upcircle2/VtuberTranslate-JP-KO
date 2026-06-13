@@ -10,8 +10,8 @@ enum STTEngine: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var displayName: String {
         switch self {
-        case .appleOnDevice: "Apple 음성인식 (기본)"
-        case .fluidParakeetJa: "Parakeet-ja (정확·일본어)"
+        case .appleOnDevice: "Apple 음성인식 (빠름)"
+        case .fluidParakeetJa: "Parakeet-ja (기본·일본어 정확)"
         }
     }
     /// FluidAudio 기반(첫 사용 시 모델 다운로드)
@@ -41,8 +41,8 @@ final class SubtitlePipeline: ObservableObject {
 
     // 번역 다듬기 옵션
     @Published var casualizeKorean = true   // 격식체 → 반말(대화체)
-    @Published var sttEngine: STTEngine = .appleOnDevice
-    @Published var nameBoosting = true      // parakeet: 멤버 이름 CustomVocabulary 부스팅(실험)
+    @Published var sttEngine: STTEngine = .fluidParakeetJa   // 기본 = parakeet(일본어 정확)
+    @Published var nameBoosting = false     // parakeet 이름 CustomVocabulary 부스팅(실험, 기본 끔)
 
     private let capture = SystemAudioCapture()
     private var recognizer: SpeechRecognizing = AppleSpeechRecognizer()

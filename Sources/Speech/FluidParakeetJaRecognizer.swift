@@ -25,7 +25,8 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
     private var feed: AsyncStream<FeedEvent>.Continuation?
     private var consumer: Task<Void, Never>?
 
-    private let transcribeIntervalSamples = 19_200   // ~1.2초마다 진행 재인식(16kHz 기준)
+    private let transcribeIntervalSamples = 11_200   // ~0.7초마다 진행 재인식(매끄러움·확정속도↑)
+    private let confidenceThreshold = 0.6            // 이 미만(예: 무발화 환각 0.27)은 무시
     private let maxUtteranceSamples = 224_000        // ~14초 안전 상한(모델 윈도우)
 
     // 라인 클리어용 RMS VAD(append 스레드에서만 접근)
@@ -67,23 +68,28 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
                     buffer.append(contentsOf: samples)
                     if buffer.count - lastCount >= self.transcribeIntervalSamples {
                         lastCount = buffer.count
-                        if let text = await self.transcribe(buffer, manager: manager, boost: false) {
-                            self.emit(text, confirmed: false)
+                        if let r = await self.transcribe(buffer, manager: manager, boost: false),
+                           r.confidence >= self.confidenceThreshold {     // 저신뢰 환각 무시
+                            self.emit(r.text, confirmed: false, confidence: r.confidence)
                         }
                     }
                     if buffer.count >= self.maxUtteranceSamples {
-                        if let text = await self.transcribe(buffer, manager: manager, boost: true) {
-                            self.emit(text, confirmed: true)
+                        if let r = await self.transcribe(buffer, manager: manager, boost: true),
+                           r.confidence >= self.confidenceThreshold {
+                            self.emit(r.text, confirmed: true, confidence: r.confidence)
                         }
                         buffer.removeAll(keepingCapacity: true)
                         lastCount = 0
+                        self.resetLineState()
                     }
                 case .finalize:
-                    if !buffer.isEmpty, let text = await self.transcribe(buffer, manager: manager, boost: true) {
-                        self.emit(text, confirmed: true)
+                    if !buffer.isEmpty, let r = await self.transcribe(buffer, manager: manager, boost: true),
+                       r.confidence >= self.confidenceThreshold {
+                        self.emit(r.text, confirmed: true, confidence: r.confidence)
                     }
                     buffer.removeAll(keepingCapacity: true)
                     lastCount = 0
+                    self.resetLineState()
                 }
             }
         }
@@ -157,7 +163,7 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
 
     // MARK: 인식
 
-    private func transcribe(_ samples: [Float], manager: AsrManager, boost: Bool) async -> String? {
+    private func transcribe(_ samples: [Float], manager: AsrManager, boost: Bool) async -> (text: String, confidence: Double)? {
         guard var state = try? TdtDecoderState(decoderLayers: 2) else { return nil }
         guard let result = try? await manager.transcribe(samples, decoderState: &state) else { return nil }
         var text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -177,22 +183,29 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
             let rescored = output.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if !rescored.isEmpty { text = rescored }
         }
-        return text.isEmpty ? nil : text
+        return text.isEmpty ? nil : (text, Double(result.confidence))
     }
 
     private var lastEmittedFull = ""
+    private var maxConfirmedLen = 0
 
-    private func emit(_ text: String, confirmed: Bool) {
+    private func emit(_ text: String, confirmed: Bool, confidence: Double) {
         let cc: Int
         if confirmed {
             cc = text.count
-            lastEmittedFull = ""        // 발화 확정 → 다음 발화는 새로 시작
         } else {
-            // LocalAgreement-2: 직전 재인식과 공통 접두를 확정으로 → 앞부분부터 매끄럽게 흰색.
-            cc = Self.commonPrefixCount(text, lastEmittedFull)
+            // LocalAgreement-2(공통 접두) + 단조 증가(후퇴 안 함) → 앞부터 매끄럽게 흰색.
+            let agreed = Self.commonPrefixCount(text, lastEmittedFull)
             lastEmittedFull = text
+            maxConfirmedLen = max(maxConfirmedLen, agreed)
+            cc = min(maxConfirmedLen, text.count)
         }
-        onUpdate?(TranscriptionUpdate(text: text, confirmedCharCount: min(cc, text.count)))
+        onUpdate?(TranscriptionUpdate(text: text, confirmedCharCount: cc, confidence: confidence))
+    }
+
+    private func resetLineState() {       // 발화 종료 시 LocalAgreement/단조 상태 리셋
+        lastEmittedFull = ""
+        maxConfirmedLen = 0
     }
 
     private static func commonPrefixCount(_ a: String, _ b: String) -> Int {

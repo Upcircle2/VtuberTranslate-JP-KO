@@ -56,9 +56,11 @@ guard !audioPath.isEmpty, let file = try? AVAudioFile(forReading: URL(fileURLWit
 }
 let format = file.processingFormat
 
+let engineArg = args.count >= 5 ? args[4] : "apple"
 let collector = Collector(log)
-let recognizer = AppleSpeechRecognizer()
 let glossary = GlossaryCorrector()
+let recognizer: SpeechRecognizing = (engineArg == "parakeet") ? FluidParakeetJaRecognizer() : AppleSpeechRecognizer()
+log("--- engine: \(engineArg) ---")
 recognizer.onUpdate = { collector.record($0) }
 
 do { try await recognizer.start(locale: locale) }

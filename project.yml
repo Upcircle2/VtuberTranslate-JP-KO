@@ -46,10 +46,13 @@ targets:
   VtuberEval:
     type: application
     platform: macOS
+    dependencies:
+      - package: FluidAudio
     sources:
       - Sources/App/AppLanguage.swift
       - Sources/Speech/SpeechRecognizing.swift
       - Sources/Speech/AppleSpeechRecognizer.swift
+      - Sources/Speech/FluidParakeetJaRecognizer.swift
       - Sources/Pipeline/GlossaryCorrector.swift
       - Sources/Pipeline/ConversationalStyle.swift
       - Eval
