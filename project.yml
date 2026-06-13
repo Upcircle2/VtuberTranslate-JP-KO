@@ -43,3 +43,29 @@ targets:
         NSPrincipalClass: NSApplication
         LSApplicationCategoryType: public.app-category.utilities
         NSSpeechRecognitionUsageDescription: "방송 음성을 인식하여 자막으로 번역하기 위해 음성 인식을 사용합니다."
+  VtuberEval:
+    type: application
+    platform: macOS
+    sources:
+      - Sources/App/AppLanguage.swift
+      - Sources/Speech/SpeechRecognizing.swift
+      - Sources/Speech/AppleSpeechRecognizer.swift
+      - Sources/Pipeline/GlossaryCorrector.swift
+      - Eval
+      - path: Resources
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sswv.VtuberEval
+        PRODUCT_NAME: VtuberEval
+        CODE_SIGN_IDENTITY: "VtuberTranslate Dev"
+        CODE_SIGN_STYLE: Manual
+        ENABLE_HARDENED_RUNTIME: NO
+        GENERATE_INFOPLIST_FILE: NO
+    info:
+      path: Eval/Info.plist
+      properties:
+        CFBundleIdentifier: com.sswv.VtuberEval
+        CFBundleName: VtuberEval
+        LSUIElement: true
+        NSSpeechRecognitionUsageDescription: "평가 하니스가 자막 파이프라인 테스트를 위해 음성 인식을 사용합니다."

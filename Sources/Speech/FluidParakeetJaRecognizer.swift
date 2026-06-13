@@ -34,6 +34,12 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
     private var silenceSeconds = 0.0
     private var finalizeArmed = true
 
+    // 스피치 게이트: 발화 레벨 이하(룸톤/노이즈)는 묵음으로 → 무발화 환각 방지
+    private let speechGateThreshold: Float = 0.012
+    private let gateHangoverSeconds = 0.35
+    private var gateSilence = 0.0
+    private var gateOpen = false
+
     func prewarm(locale: Locale) async {
         _ = try? await AsrModels.downloadAndLoad(version: .tdtJa)
         if !vocabulary.isEmpty {
@@ -84,13 +90,24 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
     }
 
     func append(_ buffer: AVAudioPCMBuffer, at time: CMTime) {
-        guard let feed, let samples = try? converter.resampleBuffer(buffer) else { return }
+        guard let feed, var samples = try? converter.resampleBuffer(buffer) else { return }
+
+        var rms: Float = 1
+        if let channels = buffer.floatChannelData {
+            vDSP_rmsqv(channels[0], 1, &rms, vDSP_Length(buffer.frameLength))
+        }
+        let duration = Double(buffer.frameLength) / buffer.format.sampleRate
+
+        // 발화 레벨 이하 구간은 묵음으로 대체 → 노이즈 환각 방지.
+        if rms >= speechGateThreshold {
+            gateOpen = true; gateSilence = 0
+        } else {
+            gateSilence += duration
+            if gateSilence >= gateHangoverSeconds { gateOpen = false }
+        }
+        if !gateOpen { for i in samples.indices { samples[i] = 0 } }
         feed.yield(.audio(samples))
 
-        guard let channels = buffer.floatChannelData else { return }
-        var rms: Float = 0
-        vDSP_rmsqv(channels[0], 1, &rms, vDSP_Length(buffer.frameLength))
-        let duration = Double(buffer.frameLength) / buffer.format.sampleRate
         if rms < vadSilenceThreshold {
             silenceSeconds += duration
             if silenceSeconds >= utteranceResetSeconds, finalizeArmed {
@@ -163,7 +180,28 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
         return text.isEmpty ? nil : text
     }
 
+    private var lastEmittedFull = ""
+
     private func emit(_ text: String, confirmed: Bool) {
-        onUpdate?(TranscriptionUpdate(text: text, confirmedCharCount: confirmed ? text.count : 0))
+        let cc: Int
+        if confirmed {
+            cc = text.count
+            lastEmittedFull = ""        // 발화 확정 → 다음 발화는 새로 시작
+        } else {
+            // LocalAgreement-2: 직전 재인식과 공통 접두를 확정으로 → 앞부분부터 매끄럽게 흰색.
+            cc = Self.commonPrefixCount(text, lastEmittedFull)
+            lastEmittedFull = text
+        }
+        onUpdate?(TranscriptionUpdate(text: text, confirmedCharCount: min(cc, text.count)))
+    }
+
+    private static func commonPrefixCount(_ a: String, _ b: String) -> Int {
+        if a.isEmpty || b.isEmpty { return 0 }
+        var count = 0
+        var ia = a.startIndex, ib = b.startIndex
+        while ia < a.endIndex && ib < b.endIndex && a[ia] == b[ib] {
+            count += 1; ia = a.index(after: ia); ib = b.index(after: ib)
+        }
+        return count
     }
 }

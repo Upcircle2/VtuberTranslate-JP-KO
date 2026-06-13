@@ -23,6 +23,7 @@ final class AppleSpeechRecognizer: SpeechRecognizing {
     private struct Segment { let start: Double; var text: String }
     private var segments: [Segment] = []
     private var committedCount = 0
+    private var lastEmittedFull = ""              // LocalAgreement-2: 직전 가설(공통 접두 확정용)
     private var joinSeparator = ""
     private let segmentGapTolerance = 0.35
 
@@ -42,6 +43,12 @@ final class AppleSpeechRecognizer: SpeechRecognizing {
     private var silenceSeconds = 0.0
     private var awaitingFinalize = false
     private var commitTailRequested = false
+
+    // 스피치 게이트: 발화 레벨 이하(룸톤/노이즈)는 디지털 묵음으로 대체 → 무발화 환각 방지
+    private let speechGateThreshold: Float = 0.012
+    private let gateHangoverSeconds = 0.35        // 말끝 잘림 방지용 여유
+    private var gateSilence = 0.0
+    private var gateOpen = false
 
     enum RecognizerError: Error { case notAuthorized }
 
@@ -77,11 +84,17 @@ final class AppleSpeechRecognizer: SpeechRecognizing {
             try await request.downloadAndInstall()
         }
 
-        let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
+        // 음성활동탐지(VAD): 음악/노이즈 등 비발화 구간 전사를 막아 무발화 환각을 줄인다.
+        let detector = SpeechDetector(
+            detectionOptions: .init(sensitivityLevel: .medium),
+            reportResults: false
+        )
+
+        let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber, detector])
         analyzerFormat = format
 
         let analyzer = SpeechAnalyzer(
-            modules: [transcriber],
+            modules: [transcriber, detector],
             options: SpeechAnalyzer.Options(priority: .high, modelRetention: .whileInUse)
         )
         self.analyzer = analyzer
@@ -110,14 +123,44 @@ final class AppleSpeechRecognizer: SpeechRecognizing {
         guard let continuation = inputContinuation, let analyzerFormat else { return }
         guard let converted = convert(buffer, to: analyzerFormat) else { return }
 
+        let rms = Self.rms(of: buffer)
+        let durationSec = Double(buffer.frameLength) / buffer.format.sampleRate
+
+        // 발화 레벨 이하 구간은 디지털 묵음으로 대체 → 분석기가 노이즈를 헛받아쓰는 환각 방지.
+        updateSpeechGate(rms: rms, duration: durationSec)
+        if !gateOpen { Self.zero(converted) }
+
         if firstInputTime == nil { firstInputTime = time }
         let start = CMTimeSubtract(time, firstInputTime ?? time)
-        let duration = CMTime(seconds: Double(buffer.frameLength) / buffer.format.sampleRate,
-                              preferredTimescale: 48_000)
+        let duration = CMTime(seconds: durationSec, preferredTimescale: 48_000)
         lastInputTime = CMTimeAdd(start, duration)
         continuation.yield(AnalyzerInput(buffer: converted, bufferStartTime: start))
 
-        detectSilenceAndFinalize(buffer, bufferDuration: duration.seconds)
+        detectSilenceAndFinalize(rms: rms, bufferDuration: durationSec)
+    }
+
+    private func updateSpeechGate(rms: Float, duration: Double) {
+        if rms >= speechGateThreshold {
+            gateOpen = true
+            gateSilence = 0
+        } else {
+            gateSilence += duration
+            if gateSilence >= gateHangoverSeconds { gateOpen = false }
+        }
+    }
+
+    private static func rms(of buffer: AVAudioPCMBuffer) -> Float {
+        guard let channels = buffer.floatChannelData else { return 1 }   // 알 수 없으면 발화로 간주
+        var r: Float = 0
+        vDSP_rmsqv(channels[0], 1, &r, vDSP_Length(buffer.frameLength))
+        return r
+    }
+
+    private static func zero(_ buffer: AVAudioPCMBuffer) {
+        guard let channels = buffer.floatChannelData else { return }
+        for c in 0..<Int(buffer.format.channelCount) {
+            memset(channels[c], 0, Int(buffer.frameLength) * MemoryLayout<Float>.size)
+        }
     }
 
     func stop() async {
@@ -140,6 +183,7 @@ final class AppleSpeechRecognizer: SpeechRecognizing {
         if pendingClear {
             segments.removeAll()
             committedCount = 0
+            lastEmittedFull = ""        // LocalAgreement 상태도 새 발화로 리셋
             pendingClear = false
         }
 
@@ -162,8 +206,14 @@ final class AppleSpeechRecognizer: SpeechRecognizing {
 
         let full = segments.map(\.text).joined(separator: joinSeparator)
         guard !full.isEmpty else { return }
-        let confirmed = segments.prefix(committedCount).map(\.text).joined(separator: joinSeparator)
-        onUpdate?(TranscriptionUpdate(text: full, confirmedCharCount: min(confirmed.count, full.count)))
+
+        // 확정 경계 = (이미 확정된 세그먼트) ∪ (LocalAgreement-2: 직전 가설과 공통 접두).
+        // → 말하는 동안 앞 어절부터 매끄럽게 흰색으로 잠긴다(끝까지 회색이던 문제 해결).
+        let committedLen = segments.prefix(committedCount).map(\.text).joined(separator: joinSeparator).count
+        let agreedLen = Self.commonPrefixCount(full, lastEmittedFull)
+        lastEmittedFull = full
+        let cc = min(max(committedLen, agreedLen), full.count)
+        onUpdate?(TranscriptionUpdate(text: full, confirmedCharCount: cc))
 
         // 문장이 끝났거나 너무 길어지면, 다음 발화 때 라인을 비우도록 예약(현재 줄은 그대로 보여줌).
         if let lastChar = full.reversed().first(where: { !$0.isWhitespace }),
@@ -176,11 +226,7 @@ final class AppleSpeechRecognizer: SpeechRecognizing {
 
     // MARK: VAD → finalize(through:)
 
-    private func detectSilenceAndFinalize(_ buffer: AVAudioPCMBuffer, bufferDuration: Double) {
-        guard let channels = buffer.floatChannelData else { return }
-        var rms: Float = 0
-        vDSP_rmsqv(channels[0], 1, &rms, vDSP_Length(buffer.frameLength))
-
+    private func detectSilenceAndFinalize(rms: Float, bufferDuration: Double) {
         if rms < vadSilenceThreshold {
             silenceSeconds += bufferDuration
             if silenceSeconds >= vadHangoverSeconds, !awaitingFinalize {
@@ -201,15 +247,28 @@ final class AppleSpeechRecognizer: SpeechRecognizing {
 
     // MARK: 보조
 
+    private static func commonPrefixCount(_ a: String, _ b: String) -> Int {
+        if a.isEmpty || b.isEmpty { return 0 }
+        var count = 0
+        var ia = a.startIndex, ib = b.startIndex
+        while ia < a.endIndex && ib < b.endIndex && a[ia] == b[ib] {
+            count += 1; ia = a.index(after: ia); ib = b.index(after: ib)
+        }
+        return count
+    }
+
     private func resetState(for locale: Locale?) {
         segments.removeAll()
         committedCount = 0
+        lastEmittedFull = ""
         pendingClear = false
         firstInputTime = nil
         lastInputTime = .zero
         silenceSeconds = 0
         awaitingFinalize = false
         commitTailRequested = false
+        gateSilence = 0
+        gateOpen = false
         if let locale {
             let code = locale.language.languageCode
             joinSeparator = (code == .japanese || code == .chinese || code == .korean) ? "" : " "

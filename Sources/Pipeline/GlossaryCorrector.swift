@@ -29,6 +29,18 @@ final class GlossaryCorrector {
         "そら", "おじょ", "宮さん", "青くん", "あおくん", "助手くん", "中の人", "前世", "本体",
     ]
 
+    /// 원형 + 가나 변형(히라가나↔가타카나). STT 표기 차이에도 매칭되게 한다.
+    private static func kanaVariants(_ s: String) -> [String] {
+        var out = [s]
+        if let kata = s.applyingTransform(.hiraganaToKatakana, reverse: false), kata != s, !out.contains(kata) {
+            out.append(kata)
+        }
+        if let hira = s.applyingTransform(.hiraganaToKatakana, reverse: true), hira != s, !out.contains(hira) {
+            out.append(hira)
+        }
+        return out
+    }
+
     /// 별명을 치환에 써도 되는지: 3글자 이상이거나, 2글자이면서 카타카나만(과매칭 위험 낮음).
     private static func isSafeAlias(_ s: String) -> Bool {
         if Self.unsafeAliases.contains(s) { return false }
@@ -40,7 +52,10 @@ final class GlossaryCorrector {
     }
 
     init(resourceName: String = "vtuber_glossary") {
-        guard let url = Bundle.main.url(forResource: resourceName, withExtension: "json"),
+        // 평가 하니스(CLI)에서는 번들 리소스가 없으므로 환경변수 경로를 우선 확인한다.
+        let url: URL? = ProcessInfo.processInfo.environment["VTUBER_GLOSSARY_PATH"].map { URL(fileURLWithPath: $0) }
+            ?? Bundle.main.url(forResource: resourceName, withExtension: "json")
+        guard let url,
               let data = try? Data(contentsOf: url),
               let file = try? JSONDecoder().decode(File.self, from: data) else {
             replacements = []
@@ -63,8 +78,11 @@ final class GlossaryCorrector {
             if let given = entry.given, Self.isSafeAlias(given.jp) {
                 pairs.append((given.jp, given.ko))
             }
-            for (form, value) in pairs where !form.isEmpty && map[form] == nil {
-                map[form] = value
+            // STT가 이름을 가타카나/히라가나 어느 쪽으로 받아쓸지 몰라 가나 변형도 함께 등록.
+            for (form, value) in pairs where !form.isEmpty {
+                for variant in Self.kanaVariants(form) where map[variant] == nil {
+                    map[variant] = value
+                }
             }
 
             // ── 커스텀 어휘: 이름 전체 + 성 + 이름 + 모든 별칭(2글자 이상). 과매칭 부담 없음.
@@ -74,7 +92,8 @@ final class GlossaryCorrector {
             forms.append(contentsOf: entry.aliases_jp ?? [])
             for form in forms {
                 let f = form.trimmingCharacters(in: .whitespaces)
-                if f.count >= 2 { vocab.insert(f) }
+                guard f.count >= 2 else { continue }
+                for variant in Self.kanaVariants(f) { vocab.insert(variant) }
             }
         }
         // 긴 형태부터 치환해야 "兎田ぺこら"가 "ぺこら"보다 먼저 잡힌다.
