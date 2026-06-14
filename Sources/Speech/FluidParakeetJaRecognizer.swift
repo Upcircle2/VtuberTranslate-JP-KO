@@ -28,7 +28,8 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
     private var vad: VadManager?
 
     private let vadWindowSamples = 4_096             // Silero 모델 네이티브 윈도우(256ms)
-    private let transcribeIntervalSamples = 11_200   // ~0.7초마다 진행 재인식(매끄러움·확정속도↑)
+    private let firstTranscribeSamples = 4_800       // 발화 첫 인식은 ~0.3초에 빨리(첫 토큰 지연↓)
+    private let transcribeIntervalSamples = 11_200   // 이후 ~0.7초마다 진행 재인식(매끄러움·확정속도↑)
     private let confidenceThreshold = 0.6            // 이 미만(저신뢰 환각)은 무시
     private let maxUtteranceSamples = 224_000        // ~14초 안전 상한(모델 윈도우)
 
@@ -51,6 +52,7 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
         consumer = Task { [weak self] in
             var buffer: [Float] = []        // 목소리로 확정된 발화만 누적
             var lastCount = 0
+            var firstEmitDone = false       // 발화의 첫 인식 여부(첫 토큰만 빨리 내보냄)
             var pending: [Float] = []       // VAD 판정 대기(256ms 윈도우로 모아 판정)
             var vadState = VadStreamState.initial()   // Silero LSTM 상태(연속 유지 필수)
 
@@ -74,10 +76,13 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
 
                     if voiced {
                         buffer.append(contentsOf: window)
-                        if buffer.count - lastCount >= self.transcribeIntervalSamples {
+                        // 첫 인식은 ~0.3초, 이후는 ~0.7초마다.
+                        let interval = firstEmitDone ? self.transcribeIntervalSamples : self.firstTranscribeSamples
+                        if buffer.count - lastCount >= interval {
                             lastCount = buffer.count
                             if let r = await self.transcribe(buffer, manager: manager, boost: false),
                                r.confidence >= self.confidenceThreshold {
+                                firstEmitDone = true
                                 self.emit(r.text, confirmed: false, confidence: r.confidence)
                             }
                         }
@@ -87,6 +92,7 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
                                 self.emit(r.text, confirmed: true, confidence: r.confidence)
                             }
                             buffer.removeAll(keepingCapacity: true); lastCount = 0
+                            firstEmitDone = false
                             self.resetLineState()
                         }
                     } else if !buffer.isEmpty {
@@ -96,6 +102,7 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
                             self.emit(r.text, confirmed: true, confidence: r.confidence)
                         }
                         buffer.removeAll(keepingCapacity: true); lastCount = 0
+                        firstEmitDone = false
                         self.resetLineState()
                     }
                     // buffer 비어있고 목소리도 없으면 버림(무발화 → 자막 없음).

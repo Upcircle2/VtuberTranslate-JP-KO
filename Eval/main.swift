@@ -52,12 +52,12 @@ FileManager.default.createFile(atPath: outPath, contents: nil)
 let out = FileHandle(forWritingAtPath: outPath)
 func log(_ s: String) { out?.write((s + "\n").data(using: .utf8)!) }
 
+let engineArg = args.count >= 5 ? args[4] : "apple"
+
 guard !audioPath.isEmpty, let file = try? AVAudioFile(forReading: URL(fileURLWithPath: audioPath)) else {
     log("ERROR: cannot read audio '\(audioPath)'"); log("=== DONE ==="); exit(0)
 }
 let format = file.processingFormat
-
-let engineArg = args.count >= 5 ? args[4] : "apple"
 
 // VAD 진단 모드: Silero VAD를 직접 돌려 윈도우별 확률/음성판정 통계를 본다.
 if engineArg == "vad" {
