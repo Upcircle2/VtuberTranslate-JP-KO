@@ -5,7 +5,7 @@ import SwiftUI
 final class OverlayPanel: NSPanel {
     init(pipeline: SubtitlePipeline) {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 1200, height: 150),
+            contentRect: NSRect(x: 0, y: 0, width: 1200, height: 300),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -34,7 +34,7 @@ final class OverlayPanel: NSPanel {
         if let screen = NSScreen.main {
             let visible = screen.visibleFrame
             let width = min(1200, visible.width - 80)
-            let height: CGFloat = 150
+            let height: CGFloat = 300
             let frame = NSRect(
                 x: visible.midX - width / 2,
                 y: visible.minY + 80,

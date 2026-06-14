@@ -3,6 +3,12 @@ import SwiftUI
 import ScreenCaptureKit
 import Translation
 
+/// 롤링 자막의 한 줄(끝난 발화 번역). 안정적 애니메이션을 위해 고유 id를 둔다.
+struct HistoryLine: Identifiable, Equatable {
+    let id: Int
+    let text: String
+}
+
 /// 오디오 캡처 → 음성 인식 → 번역 → 자막 표시를 잇는 오케스트레이터.
 @MainActor
 final class SubtitlePipeline: ObservableObject {
@@ -17,10 +23,13 @@ final class SubtitlePipeline: ObservableObject {
     @Published var statusMessage = "대기 중"
     @Published var downloadProgress: Double?   // 음성 모델 다운로드 진행률(0~1), nil=비다운로드
 
-    // 자막 표시: 원문 + (확정 번역=흰색) + (진행 중 번역=회색 꼬리)
+    // 자막 표시(롤링): 끝난 발화는 history(위, 흐리게)로 쌓이고, 현재 발화는 아래 또렷하게.
     @Published var liveSource = ""
-    @Published var confirmedTranslation = ""
-    @Published var volatileTranslation = ""
+    @Published var confirmedTranslation = ""   // 현재 발화의 확정 부분
+    @Published var volatileTranslation = ""    // 현재 발화의 진행 중 꼬리
+    @Published var history: [HistoryLine] = [] // 끝난 발화들의 번역(이전 자막)
+    private var historyCounter = 0
+    private var lastTextLen = 0
 
     // SwiftUI `.translationTask`가 관찰하는 번역 설정
     @Published var translationConfig: TranslationSession.Configuration?
@@ -144,6 +153,9 @@ final class SubtitlePipeline: ObservableObject {
         liveSource = ""
         confirmedTranslation = ""
         volatileTranslation = ""
+        history = []
+        historyCounter = 0
+        lastTextLen = 0
         stableSentences = []
         draftSource = ""
         lastDraftSent = ""
@@ -159,6 +171,21 @@ final class SubtitlePipeline: ObservableObject {
         let cc = max(0, min(update.confirmedCharCount, update.text.count))
         let confirmedText = String(update.text.prefix(cc))
         let volatileTail = String(update.text.dropFirst(cc)).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 새 발화 감지(원문이 확 짧아짐) → 직전 발화 번역을 통째로 history(위)로 밀어올리고 현재 줄을 비운다.
+        if update.text.count < lastTextLen / 2 {
+            let finished = (confirmedTranslation + " " + volatileTranslation).trimmingCharacters(in: .whitespaces)
+            if !finished.isEmpty {
+                historyCounter += 1
+                history.append(HistoryLine(id: historyCounter, text: finished))
+                if history.count > 12 { history.removeFirst(history.count - 12) }
+            }
+            confirmedTranslation = ""
+            volatileTranslation = ""
+            sentenceCache.removeAll()
+            lastDraftSent = ""
+        }
+        lastTextLen = update.text.count
 
         liveSource = update.text       // 원문은 즉시 표시(지연 0)
 
