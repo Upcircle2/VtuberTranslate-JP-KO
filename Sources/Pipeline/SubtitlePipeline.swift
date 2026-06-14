@@ -177,6 +177,7 @@ final class SubtitlePipeline: ObservableObject {
         draftSource = draft
 
         rebuildConfirmed()             // 캐시된 문장은 즉시 반영
+        // 확정(흰색) 번역은 즉시 — 한 번 잠그면 안 바뀌어 깜빡임 없음.
         needsTranslate = true
         kickTranslator()
     }
@@ -206,12 +207,14 @@ final class SubtitlePipeline: ObservableObject {
                         self.rebuildConfirmed()
                     }
                 }
-                // 2) 진행 중(회색): 미완성 꼬리를 빠르게 번역.
+                // 2) 진행 중(꼬리): 미완성 꼬리를 즉시 번역(빠른 반응).
                 if self.draftSource != self.lastDraftSent {
-                    self.lastDraftSent = self.draftSource
-                    if self.draftSource.isEmpty {
+                    let src = self.draftSource
+                    self.lastDraftSent = src
+                    if src.isEmpty {
                         self.volatileTranslation = ""
-                    } else if let translated = await self.translate(self.draftSource) {
+                    } else if let translated = await self.translate(src), self.draftSource == src {
+                        // 번역(비동기) 도중 원문이 확정/변경됐으면 결과를 버린다 → 확정문장과 중복(stale) 방지.
                         self.volatileTranslation = translated
                     }
                 }
