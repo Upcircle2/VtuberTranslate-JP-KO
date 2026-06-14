@@ -128,9 +128,13 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
     }
 
     func stop() async {
+        // 스트림을 끝내 consumer의 for-await 루프가 빠져나오게 한 뒤, 그 Task가 완전히 종료될
+        // 때까지 기다린 다음에야 공유 상태를 정리한다. 이렇게 하지 않으면 consumer(백그라운드)가
+        // manager/vad/onUpdate를 읽는 동안 MainActor가 nil로 덮어써 데이터레이스→크래시가 난다.
         feed?.finish()
-        feed = nil
-        consumer?.cancel()
+        await consumer?.value
+        // feed는 nil로 만들지 않는다: 잔여 오디오 콜백의 append가 finish된 continuation에 yield해도
+        // 안전한 no-op이라, feed 포인터 재할당 레이스를 아예 없앤다.
         consumer = nil
         manager = nil
         vad = nil
