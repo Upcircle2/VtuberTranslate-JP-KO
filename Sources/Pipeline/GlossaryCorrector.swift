@@ -16,6 +16,8 @@ final class GlossaryCorrector {
         let given: NamePart?
     }
     private struct File: Decodable { let entries: [Entry] }
+    /// 슬랭/게임용어 치환 사전(`vtuber_slang.json`, 검증된 안전 치환만).
+    private struct SlangEntry: Decodable { let jp: String; let ko: String }
 
     /// 멤버 이름 치환(일본어→한국어). "멤버 이름 부스팅" 토글이 켜졌을 때만 적용한다.
     private let nameReplacements: [(jp: String, ko: String)]
@@ -31,13 +33,6 @@ final class GlossaryCorrector {
         "そら", "おじょ", "宮さん", "青くん", "あおくん", "助手くん", "中の人", "前世", "本体",
     ]
 
-    /// Apple NMT가 자주 틀리는 VTuber 슬랭. 구별성 높은 3글자+만(과매칭 낮음). 깨끗한 한국어로.
-    private static let safeSlang: [(String, String)] = [
-        ("やばい", "대박"), ("やばすぎ", "완전 대박"), ("てぇてぇ", "너무 소중해"),
-        ("ぽんこつ", "허당"), ("どんまい", "괜찮아"), ("えぐい", "쩐다"),
-        ("おつかれさま", "수고했어"), ("おつかれ", "수고했어"), ("ありがとう", "고마워"),
-    ]
-
     /// 원형 + 가나 변형(히라가나↔가타카나). STT 표기 차이에도 매칭되게 한다.
     private static func kanaVariants(_ s: String) -> [String] {
         var out = [s]
@@ -48,6 +43,14 @@ final class GlossaryCorrector {
             out.append(hira)
         }
         return out
+    }
+
+    /// 치환(replace)용 변형. 2글자 가타카나는 히라가나 변형을 만들지 않는다 —
+    /// ココ→ここ(여기), メル→める(동사 어미)처럼 흔한 단어/문법과 충돌하기 때문.
+    private static func replacementVariants(_ s: String) -> [String] {
+        let allKatakana = s.unicodeScalars.allSatisfy { (0x30A0...0x30FF).contains($0.value) }
+        if s.count == 2 && allKatakana { return [s] }
+        return kanaVariants(s)
     }
 
     /// 별명을 치환에 써도 되는지: 3글자 이상이거나, 2글자이면서 카타카나만(과매칭 위험 낮음).
@@ -106,11 +109,19 @@ final class GlossaryCorrector {
                 for variant in Self.kanaVariants(f) { vocab.insert(variant) }
             }
         }
-        // Apple NMT가 자주 오역하는 핵심 슬랭(구별성 높고 과매칭 낮은 것만) — 이름과 별개 맵.
+        // 슬랭/게임용어: 별도 JSON(vtuber_slang.json, 검증된 안전 치환만)에서 로드.
+        // 2글자 가타카나는 히라가나 변형 금지(replacementVariants)로 과매칭 차단.
         var slangMap: [String: String] = [:]
-        for (jp, ko) in Self.safeSlang {
-            for variant in Self.kanaVariants(jp) where slangMap[variant] == nil {
-                slangMap[variant] = ko
+        let slangURL = url.deletingLastPathComponent().appendingPathComponent("vtuber_slang.json")
+        if let sdata = try? Data(contentsOf: slangURL),
+           let slang = try? JSONDecoder().decode([SlangEntry].self, from: sdata) {
+            for e in slang {
+                let jp = e.jp.trimmingCharacters(in: .whitespaces)
+                let ko = e.ko.trimmingCharacters(in: .whitespaces)
+                guard !jp.isEmpty, !ko.isEmpty else { continue }
+                for variant in Self.replacementVariants(jp) where slangMap[variant] == nil {
+                    slangMap[variant] = ko
+                }
             }
         }
 

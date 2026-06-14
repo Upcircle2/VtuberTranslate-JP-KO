@@ -54,6 +54,45 @@ func log(_ s: String) { out?.write((s + "\n").data(using: .utf8)!) }
 
 let engineArg = args.count >= 5 ? args[4] : "apple"
 
+// 용어 검증 모드: "jp|ko" 한 줄씩 받아, NMT가 실제로 틀리는지(HELP) + 우리 한국어 값이
+// NMT를 통과해 살아남는지(OK)를 판정. `... <cand.txt> ja-JP <out> terms`
+if engineArg == "terms" {
+    let lines = ((try? String(contentsOfFile: audioPath, encoding: .utf8)) ?? "")
+        .split(separator: "\n").map(String.init)
+    let session = TranslationSession(installedSource: Locale.Language(identifier: "ja"),
+                                     target: Locale.Language(identifier: "ko"))
+    func tr(_ s: String) async -> String {
+        ((try? await session.translate(s).targetText) ?? "?").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    for line in lines {
+        let parts = line.split(separator: "|", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+        guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { continue }
+        let jp = parts[0], ko = parts[1]
+        let nmtJp = await tr(jp)               // NMT의 기본 번역
+        let surv = await tr(ko)                // 우리 ko가 NMT를 통과하는지
+        let help = (nmtJp != ko) ? "HELP" : "—   "   // NMT 결과가 우리 값과 다르면 치환 의미 있음
+        let ok = (surv == ko) ? "OK " : "CHG"        // ko가 그대로면 문장 삽입 시 안전
+        log("[\(help)|\(ok)] \(jp) | nmt:\(nmtJp) | ko:\(ko) | ko→nmt:\(surv)")
+    }
+    log("=== DONE ==="); exit(0)
+}
+
+// localize 검증 모드: 입력 문장에 슬랭 치환을 적용한 결과를 본다(치환 동작 + 과매칭 점검).
+if engineArg == "loc" {
+    let g = GlossaryCorrector()
+    let session = TranslationSession(installedSource: Locale.Language(identifier: "ja"),
+                                     target: Locale.Language(identifier: "ko"))
+    let lines = ((try? String(contentsOfFile: audioPath, encoding: .utf8)) ?? "")
+        .split(separator: "\n").map(String.init)
+    for line in lines where !line.trimmingCharacters(in: .whitespaces).isEmpty {
+        let loc = g.localize(line)
+        let nmt = (try? await session.translate(loc).targetText) ?? "?"
+        let ko = ConversationalStyle.casualize(nmt)
+        log("\(loc == line ? "  " : "* ")\(line)  →  \(ko)")
+    }
+    log("=== DONE ==="); exit(0)
+}
+
 guard !audioPath.isEmpty, let file = try? AVAudioFile(forReading: URL(fileURLWithPath: audioPath)) else {
     log("ERROR: cannot read audio '\(audioPath)'"); log("=== DONE ==="); exit(0)
 }
