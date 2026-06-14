@@ -8,7 +8,7 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     SWIFT_STRICT_CONCURRENCY: minimal
-    MARKETING_VERSION: "2.1.0"
+    MARKETING_VERSION: "1.0.0"
     CURRENT_PROJECT_VERSION: "1"
     GENERATE_INFOPLIST_FILE: NO
 packages:
@@ -38,6 +38,8 @@ targets:
       properties:
         CFBundleDisplayName: VtuberTranslate JP→KO
         CFBundleName: VtuberTranslate
+        CFBundleShortVersionString: "1.0.0"
+        CFBundleVersion: "1"
         LSMinimumSystemVersion: "26.0"
         NSHighResolutionCapable: true
         NSPrincipalClass: NSApplication
