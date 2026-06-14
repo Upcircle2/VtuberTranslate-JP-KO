@@ -28,9 +28,18 @@ final class SubtitlePipeline: ObservableObject {
     @Published var casualizeKorean = true   // 격식체 → 반말(대화체)
     @Published var nameBoosting = false     // 이름 CustomVocabulary 부스팅(실험, 기본 끔)
 
+    // V2.1 하이브리드: 확정(완성 문장) 자막은 DeepL(고품질), 진행 중은 Apple 온디바이스(즉시).
+    @Published var useDeepL = UserDefaults.standard.bool(forKey: "useDeepL") {
+        didSet { UserDefaults.standard.set(useDeepL, forKey: "useDeepL") }
+    }
+    @Published var deepLApiKey = UserDefaults.standard.string(forKey: "deepLApiKey") ?? "" {
+        didSet { UserDefaults.standard.set(deepLApiKey, forKey: "deepLApiKey") }
+    }
+
     private let capture = SystemAudioCapture()
     private var recognizer: SpeechRecognizing = FluidParakeetJaRecognizer()
     private let translator = AppleTranslator()
+    private let deepL = DeepLTranslator()
     private let glossary = GlossaryCorrector()
 
     // 문장 단위 번역 상태: 확정(흰색)은 "완성된 문장"만 번역해 잠그고(고품질),
@@ -182,9 +191,9 @@ final class SubtitlePipeline: ObservableObject {
             guard let self else { return }
             while self.needsTranslate {
                 self.needsTranslate = false
-                // 1) 완성 문장: 캐시에 없는 것만 완전한 문장으로 번역(고품질, 1회).
+                // 1) 완성 문장: 캐시에 없는 것만 완전한 문장으로 번역(DeepL 고품질, 1회).
                 for s in self.stableSentences where self.sentenceCache[s] == nil {
-                    if let translated = await self.translate(s) {
+                    if let translated = await self.translate(s, highQuality: true) {
                         self.sentenceCache[s] = translated
                         self.rebuildConfirmed()
                     }
@@ -219,10 +228,20 @@ final class SubtitlePipeline: ObservableObject {
         return (sentences, current.trimmingCharacters(in: .whitespaces))
     }
 
-    /// 번역 전 고유명사 치환(이름 정확 출력) → Apple 온디바이스 번역 → 반말 변환.
-    private func translate(_ source: String) async -> String? {
+    /// 번역 전 고유명사 치환 → 번역 → 반말 변환.
+    /// highQuality(확정 문장)면 DeepL을 우선 쓰고, 미사용/실패 시 Apple 온디바이스로 폴백한다.
+    private func translate(_ source: String, highQuality: Bool = false) async -> String? {
         let localized = glossary.localize(source)
-        guard let translated = await translator.translate(localized) else { return nil }
-        return casualizeKorean ? ConversationalStyle.casualize(translated) : translated
+        var translated: String?
+        if highQuality, useDeepL, !deepLApiKey.isEmpty {
+            translated = await deepL.translate(localized, apiKey: deepLApiKey,
+                                               source: sourceLanguage.deepLCode,
+                                               target: targetLanguage.deepLCode)
+        }
+        if translated == nil {                         // DeepL 미사용/실패 → 온디바이스 폴백
+            translated = await translator.translate(localized)
+        }
+        guard let result = translated else { return nil }
+        return casualizeKorean ? ConversationalStyle.casualize(result) : result
     }
 }

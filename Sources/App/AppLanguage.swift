@@ -27,4 +27,13 @@ enum AppLanguage: String, CaseIterable, Identifiable {
 
     var locale: Locale { Locale(identifier: localeIdentifier) }
     var language: Locale.Language { Locale.Language(identifier: localeIdentifier) }
+
+    /// DeepL API 언어 코드.
+    var deepLCode: String {
+        switch self {
+        case .japanese: "JA"
+        case .english: "EN"
+        case .korean: "KO"
+        }
+    }
 }
