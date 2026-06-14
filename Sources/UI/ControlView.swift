@@ -35,23 +35,13 @@ struct ControlView: View {
                 Toggle("대화체(반말)로 표시", isOn: $pipeline.casualizeKorean)
             }
 
-            Section("음성인식 엔진") {
-                Picker("엔진", selection: $pipeline.sttEngine) {
-                    ForEach(STTEngine.allCases) { engine in
-                        Text(engine.displayName).tag(engine)
-                    }
-                }
-                .pickerStyle(.inline)
-                .disabled(pipeline.isRunning)
-                if pipeline.sttEngine.needsDownload {
-                    Text("첫 사용 시 모델(수백 MB)을 내려받습니다. 일본어 권장.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if pipeline.sttEngine == .fluidParakeetJa {
-                    Toggle("멤버 이름 부스팅 (실험)", isOn: $pipeline.nameBoosting)
-                        .disabled(pipeline.isRunning)
-                }
+            Section("음성인식") {
+                LabeledContent("엔진", value: "Parakeet-ja (일본어)")
+                Text("첫 사용 시 모델(수백 MB)을 내려받습니다.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Toggle("멤버 이름 부스팅 (실험)", isOn: $pipeline.nameBoosting)
+                    .disabled(pipeline.isRunning)
             }
 
             Section {

@@ -3,21 +3,6 @@ import SwiftUI
 import ScreenCaptureKit
 import Translation
 
-/// 받아쓰기(STT) 엔진 선택. Apple은 빠르고, FluidAudio Parakeet-ja는 일본어 정확도가 높다.
-enum STTEngine: String, CaseIterable, Identifiable {
-    case appleOnDevice
-    case fluidParakeetJa
-    var id: String { rawValue }
-    var displayName: String {
-        switch self {
-        case .appleOnDevice: "Apple 음성인식 (빠름)"
-        case .fluidParakeetJa: "Parakeet-ja (기본·일본어 정확)"
-        }
-    }
-    /// FluidAudio 기반(첫 사용 시 모델 다운로드)
-    var needsDownload: Bool { self != .appleOnDevice }
-}
-
 /// 오디오 캡처 → 음성 인식 → 번역 → 자막 표시를 잇는 오케스트레이터.
 @MainActor
 final class SubtitlePipeline: ObservableObject {
@@ -41,11 +26,10 @@ final class SubtitlePipeline: ObservableObject {
 
     // 번역 다듬기 옵션
     @Published var casualizeKorean = true   // 격식체 → 반말(대화체)
-    @Published var sttEngine: STTEngine = .fluidParakeetJa   // 기본 = parakeet(일본어 정확)
-    @Published var nameBoosting = false     // parakeet 이름 CustomVocabulary 부스팅(실험, 기본 끔)
+    @Published var nameBoosting = false     // 이름 CustomVocabulary 부스팅(실험, 기본 끔)
 
     private let capture = SystemAudioCapture()
-    private var recognizer: SpeechRecognizing = AppleSpeechRecognizer()
+    private var recognizer: SpeechRecognizing = FluidParakeetJaRecognizer()
     private let translator = AppleTranslator()
     private let glossary = GlossaryCorrector()
 
@@ -73,15 +57,11 @@ final class SubtitlePipeline: ObservableObject {
         }
     }
 
+    /// 받아쓰기 엔진은 FluidAudio Parakeet-ja(일본어 정확) 단일 고정.
     private func makeRecognizer() -> SpeechRecognizing {
-        switch sttEngine {
-        case .appleOnDevice:
-            return AppleSpeechRecognizer()
-        case .fluidParakeetJa:
-            let recognizer = FluidParakeetJaRecognizer()
-            if nameBoosting { recognizer.vocabulary = glossary.nameVocabulary }
-            return recognizer
-        }
+        let recognizer = FluidParakeetJaRecognizer()
+        if nameBoosting { recognizer.vocabulary = glossary.nameVocabulary }
+        return recognizer
     }
 
     /// 방송 시작 전에 음성 모델을 미리 내려받아 콜드스타트를 줄인다.
