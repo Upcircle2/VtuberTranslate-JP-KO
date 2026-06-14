@@ -51,8 +51,13 @@ struct ControlView: View {
                 Text("첫 사용 시 모델(수백 MB)을 내려받습니다.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Toggle("멤버 이름 부스팅 (실험)", isOn: $pipeline.nameBoosting)
+                Toggle("멤버 이름 보정", isOn: $pipeline.nameBoosting)
                     .disabled(pipeline.isRunning)
+                if pipeline.nameBoosting {
+                    Text("홀로라이브·VSPO 멤버 이름을 한국어 정식 표기로 바꿉니다(예: 兎田ぺこら→우사다 페코라). STT 어휘 부스팅용 모델을 추가로 내려받습니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section {

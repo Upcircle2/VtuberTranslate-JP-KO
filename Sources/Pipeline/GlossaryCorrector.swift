@@ -17,8 +17,10 @@ final class GlossaryCorrector {
     }
     private struct File: Decodable { let entries: [Entry] }
 
-    /// (일본어 형태, 한국어 치환) 쌍을 긴 것부터 정렬 — 최장 일치 우선.
-    private let replacements: [(jp: String, ko: String)]
+    /// 멤버 이름 치환(일본어→한국어). "멤버 이름 부스팅" 토글이 켜졌을 때만 적용한다.
+    private let nameReplacements: [(jp: String, ko: String)]
+    /// 슬랭 치환(やばい→대박 등). 이름과 무관하므로 항상 적용한다.
+    private let slangReplacements: [(jp: String, ko: String)]
 
     /// STT 커스텀 어휘(바이어싱)용 일본어 이름 형태 목록(이름 전체+성+이름+별칭).
     /// 치환과 달리 과매칭 부담이 없어 성씨도 포함한다.
@@ -65,12 +67,13 @@ final class GlossaryCorrector {
         guard let url,
               let data = try? Data(contentsOf: url),
               let file = try? JSONDecoder().decode(File.self, from: data) else {
-            replacements = []
+            nameReplacements = []
+            slangReplacements = []
             nameVocabulary = []
             return
         }
         // 이름(고유명사)만 번역-전 치환에 쓴다. 슬랭/일반어는 과매칭·뜻풀이 문제로 제외.
-        var map: [String: String] = [:]
+        var map: [String: String] = [:]       // 이름 치환
         var vocab = Set<String>()
         for entry in file.entries where (entry.kind ?? "name") == "name" {
             let ko = entry.ko.trimmingCharacters(in: .whitespaces)
@@ -103,26 +106,34 @@ final class GlossaryCorrector {
                 for variant in Self.kanaVariants(f) { vocab.insert(variant) }
             }
         }
-        // Apple NMT가 자주 오역하는 핵심 슬랭(구별성 높고 과매칭 낮은 것만) 보강.
+        // Apple NMT가 자주 오역하는 핵심 슬랭(구별성 높고 과매칭 낮은 것만) — 이름과 별개 맵.
+        var slangMap: [String: String] = [:]
         for (jp, ko) in Self.safeSlang {
-            for variant in Self.kanaVariants(jp) where map[variant] == nil {
-                map[variant] = ko
+            for variant in Self.kanaVariants(jp) where slangMap[variant] == nil {
+                slangMap[variant] = ko
             }
         }
 
         // 긴 형태부터 치환해야 "兎田ぺこら"가 "ぺこら"보다 먼저 잡힌다.
-        replacements = map.sorted { $0.key.count > $1.key.count }.map { ($0.key, $0.value) }
+        nameReplacements = map.sorted { $0.key.count > $1.key.count }.map { ($0.key, $0.value) }
+        slangReplacements = slangMap.sorted { $0.key.count > $1.key.count }.map { ($0.key, $0.value) }
         nameVocabulary = Array(vocab)
     }
 
-    var isEmpty: Bool { replacements.isEmpty }
+    var isEmpty: Bool { nameReplacements.isEmpty && slangReplacements.isEmpty }
 
-    /// 일본어 텍스트의 알려진 고유명사/슬랭을 한국어로 치환해 번역기에 넘길 형태로 만든다.
-    func localize(_ text: String) -> String {
-        guard !replacements.isEmpty, !text.isEmpty else { return text }
+    /// 일본어 텍스트의 알려진 슬랭(+옵션으로 멤버 이름)을 한국어로 치환해 번역기에 넘길 형태로 만든다.
+    /// - Parameter includeNames: "멤버 이름 부스팅"이 켜졌을 때만 이름을 치환한다(기본 false).
+    func localize(_ text: String, includeNames: Bool = false) -> String {
+        guard !text.isEmpty else { return text }
         var result = text
-        for (jp, ko) in replacements where result.contains(jp) {
+        for (jp, ko) in slangReplacements where result.contains(jp) {
             result = result.replacingOccurrences(of: jp, with: ko)
+        }
+        if includeNames {
+            for (jp, ko) in nameReplacements where result.contains(jp) {
+                result = result.replacingOccurrences(of: jp, with: ko)
+            }
         }
         return result
     }

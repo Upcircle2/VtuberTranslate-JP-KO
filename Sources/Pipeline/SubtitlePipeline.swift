@@ -26,7 +26,10 @@ final class SubtitlePipeline: ObservableObject {
 
     // 번역 다듬기 옵션
     @Published var casualizeKorean = true   // 격식체 → 반말(대화체)
-    @Published var nameBoosting = false     // 이름 CustomVocabulary 부스팅(실험, 기본 끔)
+    // 멤버 이름 보정: 켜면 ① 번역 전 일본어 이름→한국어 정식표기 치환, ② STT 어휘 부스팅.
+    @Published var nameBoosting = UserDefaults.standard.bool(forKey: "nameBoosting") {
+        didSet { UserDefaults.standard.set(nameBoosting, forKey: "nameBoosting") }
+    }
 
     // V2.1 하이브리드: 확정(완성 문장) 자막은 DeepL(고품질), 진행 중은 Apple 온디바이스(즉시).
     @Published var useDeepL = UserDefaults.standard.bool(forKey: "useDeepL") {
@@ -231,7 +234,8 @@ final class SubtitlePipeline: ObservableObject {
     /// 번역 전 고유명사 치환 → 번역 → 반말 변환.
     /// highQuality(확정 문장)면 DeepL을 우선 쓰고, 미사용/실패 시 Apple 온디바이스로 폴백한다.
     private func translate(_ source: String, highQuality: Bool = false) async -> String? {
-        let localized = glossary.localize(source)
+        // 멤버 이름 치환은 "멤버 이름 부스팅" 토글이 켜졌을 때만(슬랭은 항상).
+        let localized = glossary.localize(source, includeNames: nameBoosting)
         var translated: String?
         if highQuality, useDeepL, !deepLApiKey.isEmpty {
             translated = await deepL.translate(localized, apiKey: deepLApiKey,

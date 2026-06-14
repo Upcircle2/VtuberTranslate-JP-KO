@@ -44,8 +44,11 @@ final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func stop() async {
-        try? await stream?.stopCapture()
-        stream = nil
+        guard let stream else { return }
+        try? await stream.stopCapture()
+        try? stream.removeStreamOutput(self, type: .audio)   // 델리게이트/출력 참조 해제 → 캡처·디코더 즉시 반납
+        self.stream = nil
+        onBuffer = nil
     }
 
     // MARK: SCStreamOutput
