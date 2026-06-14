@@ -12,6 +12,7 @@ import CoreMedia
 /// 부스팅 준비/실행이 실패해도 기본 받아쓰기는 그대로 진행한다(폴백).
 final class FluidParakeetJaRecognizer: SpeechRecognizing {
     var onUpdate: ((TranscriptionUpdate) -> Void)?
+    var onDownloadProgress: ((Double) -> Void)?
     var vocabulary: [String] = []          // 비어있으면 이름 부스팅 비활성
 
     private var manager: AsrManager?
@@ -36,7 +37,9 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
     private let maxUtteranceSamples = 224_000        // ~14초 안전 상한(모델 윈도우)
 
     func prewarm(locale: Locale) async {
-        _ = try? await AsrModels.downloadAndLoad(version: .tdtJa)
+        let report = onDownloadProgress
+        _ = try? await AsrModels.downloadAndLoad(version: .tdtJa,
+            progressHandler: { p in report?(p.fractionCompleted) })
         vad = try? await VadManager()
         if !vocabulary.isEmpty {
             _ = try? await CtcModels.downloadAndLoad(variant: .ctc110m)
@@ -44,7 +47,9 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
     }
 
     func start(locale: Locale) async throws {
-        let models = try await AsrModels.downloadAndLoad(version: .tdtJa)
+        let report = onDownloadProgress
+        let models = try await AsrModels.downloadAndLoad(version: .tdtJa,
+            progressHandler: { p in report?(p.fractionCompleted) })
         manager = AsrManager(models: models)
         if vad == nil { vad = try? await VadManager() }
         if !vocabulary.isEmpty { await setupBoosting() }

@@ -15,6 +15,7 @@ final class SubtitlePipeline: ObservableObject {
     // 상태
     @Published var isRunning = false
     @Published var statusMessage = "대기 중"
+    @Published var downloadProgress: Double?   // 음성 모델 다운로드 진행률(0~1), nil=비다운로드
 
     // 자막 표시: 원문 + (확정 번역=흰색) + (진행 중 번역=회색 꼬리)
     @Published var liveSource = ""
@@ -73,12 +74,16 @@ final class SubtitlePipeline: ObservableObject {
     private func makeRecognizer() -> SpeechRecognizing {
         let recognizer = FluidParakeetJaRecognizer()
         if nameBoosting { recognizer.vocabulary = glossary.nameVocabulary }
+        recognizer.onDownloadProgress = { [weak self] progress in
+            Task { @MainActor in self?.downloadProgress = progress < 1.0 ? progress : nil }
+        }
         return recognizer
     }
 
     /// 방송 시작 전에 음성 모델을 미리 내려받아 콜드스타트를 줄인다.
     func prepare() async {
         await makeRecognizer().prewarm(locale: sourceLanguage.locale)
+        downloadProgress = nil   // 다운로드/예열 완료
     }
 
     func attachTranslationSession(_ session: TranslationSession) {

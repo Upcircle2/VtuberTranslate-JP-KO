@@ -10,6 +10,7 @@ import Accelerate
 /// result.range.start의 전진으로 '확정 세그먼트 + 교체형 volatile 꼬리'를 직접 재구성한다.
 final class AppleSpeechRecognizer: SpeechRecognizing {
     var onUpdate: ((TranscriptionUpdate) -> Void)?
+    var onDownloadProgress: ((Double) -> Void)?   // Apple 다운로드는 시스템 관리라 미보고
 
     private var analyzer: SpeechAnalyzer?
     private var transcriber: SpeechTranscriber?

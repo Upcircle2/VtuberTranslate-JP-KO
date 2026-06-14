@@ -48,9 +48,17 @@ struct ControlView: View {
 
             Section("음성인식") {
                 LabeledContent("엔진", value: "Parakeet-ja (일본어)")
-                Text("첫 사용 시 모델(수백 MB)을 내려받습니다.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if let progress = pipeline.downloadProgress {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("음성 모델 다운로드 중… \(Int(progress * 100))%")
+                            .font(.caption)
+                        ProgressView(value: progress)
+                    }
+                } else {
+                    Text("첫 사용 시 모델(수백 MB)을 내려받습니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Toggle("멤버 이름 보정", isOn: $pipeline.nameBoosting)
                     .disabled(pipeline.isRunning)
                 if pipeline.nameBoosting {

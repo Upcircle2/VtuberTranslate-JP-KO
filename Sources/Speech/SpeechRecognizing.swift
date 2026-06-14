@@ -17,6 +17,10 @@ protocol SpeechRecognizing: AnyObject {
     /// 전사가 갱신될 때마다 호출된다. 임의 스레드에서 호출될 수 있다.
     var onUpdate: ((TranscriptionUpdate) -> Void)? { get set }
 
+    /// 모델 다운로드 진행률(0~1)을 알린다. 임의 스레드에서 호출될 수 있다.
+    /// 다운로드를 진행률 보고하는 엔진만 호출한다.
+    var onDownloadProgress: ((Double) -> Void)? { get set }
+
     /// 모델을 미리 내려받아 콜드스타트를 줄인다(가능한 엔진만). 실패해도 조용히 무시.
     func prewarm(locale: Locale) async
 
