@@ -30,6 +30,8 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
     private let vadWindowSamples = 4_096             // Silero 모델 네이티브 윈도우(256ms)
     private let firstTranscribeSamples = 4_800       // 발화 첫 인식은 ~0.3초에 빨리(첫 토큰 지연↓)
     private let transcribeIntervalSamples = 11_200   // 이후 ~0.7초마다 진행 재인식(매끄러움·확정속도↑)
+    private let longBufferSamples = 96_000           // ~6초 이상이면(매 재인식이 비쌈)
+    private let longInterval = 19_200                // ~1.2초로 간격을 늘려 CPU↓(저사양 보호)
     private let confidenceThreshold = 0.6            // 이 미만(저신뢰 환각)은 무시
     private let maxUtteranceSamples = 224_000        // ~14초 안전 상한(모델 윈도우)
 
@@ -76,8 +78,11 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
 
                     if voiced {
                         buffer.append(contentsOf: window)
-                        // 첫 인식은 ~0.3초, 이후는 ~0.7초마다.
-                        let interval = firstEmitDone ? self.transcribeIntervalSamples : self.firstTranscribeSamples
+                        // 첫 인식은 ~0.3초, 이후 ~0.7초, 긴 발화(6초+)는 ~1.2초로 늦춰 CPU 절감.
+                        let interval: Int
+                        if !firstEmitDone { interval = self.firstTranscribeSamples }
+                        else if buffer.count >= self.longBufferSamples { interval = self.longInterval }
+                        else { interval = self.transcribeIntervalSamples }
                         if buffer.count - lastCount >= interval {
                             lastCount = buffer.count
                             if let r = await self.transcribe(buffer, manager: manager, boost: false),
