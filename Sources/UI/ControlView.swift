@@ -49,18 +49,15 @@ struct ControlView: View {
             Section("음성인식") {
                 LabeledContent("엔진", value: "Parakeet-ja (일본어)")
                 if let progress = pipeline.downloadProgress {
-                    VStack(alignment: .leading, spacing: 4) {
-                        if progress < 0.5 {
-                            // 다운로드 단계(0~0.5)를 0~100%로 펼쳐 부드럽게 표시.
-                            Text("음성 모델 다운로드 중… \(Int(min(progress / 0.5, 1) * 100))%")
-                                .font(.caption)
-                            ProgressView(value: min(progress / 0.5, 1))
-                        } else {
-                            // 모델 컴파일 단계는 세밀한 진행을 못 주므로 무한 스피너로.
-                            Text("음성 모델 준비 중… (잠시만 기다려 주세요)")
-                                .font(.caption)
-                            ProgressView()
-                        }
+                    // FluidAudio의 진행 보고가 거칠어(큰 파일은 완료 시 한 번) % 막대는 점프함.
+                    // 점프하는 숫자보다 스피너+안내가 더 정직해서 무한 스피너로 표시.
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(progress < 0.5
+                             ? "음성 모델 다운로드 중… (처음 한 번만, 수백 MB · 1~2분)"
+                             : "음성 모델 준비 중… (거의 다 됐어요)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 } else {
                     Text("첫 사용 시 모델(수백 MB)을 내려받습니다.")

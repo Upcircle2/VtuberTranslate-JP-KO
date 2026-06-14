@@ -38,7 +38,7 @@ targets:
       properties:
         CFBundleDisplayName: VtuberTranslate JP→KO
         CFBundleName: VtuberTranslate
-        CFBundleShortVersionString: "1.0.2"
+        CFBundleShortVersionString: "1.0.3"
         CFBundleVersion: "1"
         LSMinimumSystemVersion: "26.0"
         NSHighResolutionCapable: true
