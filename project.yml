@@ -36,7 +36,7 @@ targets:
     info:
       path: Sources/Info.plist
       properties:
-        CFBundleDisplayName: Vtuber 자막
+        CFBundleDisplayName: VtuberTranslate JP→KO
         CFBundleName: VtuberTranslate
         LSMinimumSystemVersion: "26.0"
         NSHighResolutionCapable: true
