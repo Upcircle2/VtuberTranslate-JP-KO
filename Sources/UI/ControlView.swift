@@ -50,9 +50,17 @@ struct ControlView: View {
                 LabeledContent("엔진", value: "Parakeet-ja (일본어)")
                 if let progress = pipeline.downloadProgress {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("음성 모델 다운로드 중… \(Int(progress * 100))%")
-                            .font(.caption)
-                        ProgressView(value: progress)
+                        if progress < 0.5 {
+                            // 다운로드 단계(0~0.5)를 0~100%로 펼쳐 부드럽게 표시.
+                            Text("음성 모델 다운로드 중… \(Int(min(progress / 0.5, 1) * 100))%")
+                                .font(.caption)
+                            ProgressView(value: min(progress / 0.5, 1))
+                        } else {
+                            // 모델 컴파일 단계는 세밀한 진행을 못 주므로 무한 스피너로.
+                            Text("음성 모델 준비 중… (잠시만 기다려 주세요)")
+                                .font(.caption)
+                            ProgressView()
+                        }
                     }
                 } else {
                     Text("첫 사용 시 모델(수백 MB)을 내려받습니다.")
