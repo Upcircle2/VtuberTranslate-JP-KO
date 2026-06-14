@@ -33,13 +33,13 @@ final class SubtitlePipeline: ObservableObject {
     private let translator = AppleTranslator()
     private let glossary = GlossaryCorrector()
 
-    // confirmed-prefix 증분 번역 상태(ja→ko SOV 동어순 활용)
-    private var confirmedSource = ""
-    private var volatileSource = ""
-    private var lastConfirmedSent = ""
-    private var lastVolatileSent = ""
-    private var needsConfirmed = false
-    private var needsVolatile = false
+    // 문장 단위 번역 상태: 확정(흰색)은 "완성된 문장"만 번역해 잠그고(고품질),
+    // 진행 중(회색)은 미완성 꼬리를 빠르게 초벌 번역한다.
+    private var stableSentences: [String] = []     // 현재 확정 텍스트의 완성 문장들(JP)
+    private var draftSource = ""                    // 진행 중 = 미완성 문장 + 미확정 꼬리(JP)
+    private var lastDraftSent = ""
+    private var sentenceCache: [String: String] = [:]   // 완성 문장(JP) → 번역(KO), 1회만 번역
+    private var needsTranslate = false
     private var translateWorker: Task<Void, Never>?
 
     // MARK: 설정/준비
@@ -127,12 +127,11 @@ final class SubtitlePipeline: ObservableObject {
         liveSource = ""
         confirmedTranslation = ""
         volatileTranslation = ""
-        confirmedSource = ""
-        volatileSource = ""
-        lastConfirmedSent = ""
-        lastVolatileSent = ""
-        needsConfirmed = false
-        needsVolatile = false
+        stableSentences = []
+        draftSource = ""
+        lastDraftSent = ""
+        sentenceCache.removeAll()
+        needsTranslate = false
         translateWorker?.cancel()
         translateWorker = nil
     }
@@ -141,47 +140,83 @@ final class SubtitlePipeline: ObservableObject {
 
     private func handleUpdate(_ update: TranscriptionUpdate) {
         let cc = max(0, min(update.confirmedCharCount, update.text.count))
-        let confirmed = String(update.text.prefix(cc))
-        let volatile = String(update.text.dropFirst(cc)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let confirmedText = String(update.text.prefix(cc))
+        let volatileTail = String(update.text.dropFirst(cc)).trimmingCharacters(in: .whitespacesAndNewlines)
 
         liveSource = update.text       // 원문은 즉시 표시(지연 0)
-        confirmedSource = confirmed
-        volatileSource = volatile
 
-        if confirmed != lastConfirmedSent { needsConfirmed = true }
-        if volatile != lastVolatileSent { needsVolatile = true }
+        // 확정 영역을 완성 문장 + 미완성 꼬리로 분리.
+        // 완성 문장만 흰색으로 잠그고(완전한 입력 → NMT 품질↑), 나머지는 회색 초벌로.
+        let (complete, partial) = Self.splitSentences(confirmedText)
+        var stable = complete
+        var draft = (partial + " " + volatileTail).trimmingCharacters(in: .whitespacesAndNewlines)
+        // 발화가 통째로 확정됐는데 종결부호가 없으면(STT가 。를 안 붙인 경우),
+        // 미완성 꼬리를 한 문장으로 간주해 흰색으로 잠근다(회색에 영영 남는 것 방지).
+        if cc == update.text.count, cc > 0, !partial.isEmpty {
+            stable.append(partial)
+            draft = ""
+        }
+        stableSentences = stable
+        draftSource = draft
+
+        rebuildConfirmed()             // 캐시된 문장은 즉시 반영
+        needsTranslate = true
         kickTranslator()
     }
 
-    /// 확정 prefix는 즉시(저빈도·고중요) 번역해 잠그고, volatile 꼬리는 최신값 우선으로 번역해
-    /// 회색으로 덧붙인다. 번역은 항상 1개만 in-flight라 세션 충돌이 없다.
+    /// 캐시된 완성-문장 번역을 앞에서부터 이어붙여 흰색 확정 자막을 만든다(빈 구멍 없이 prefix만).
+    private func rebuildConfirmed() {
+        var parts: [String] = []
+        for s in stableSentences {
+            guard let t = sentenceCache[s] else { break }
+            parts.append(t)
+        }
+        confirmedTranslation = parts.joined(separator: " ")
+    }
+
+    /// 완성 문장은 "한 문장 통째로" 1회 번역해 캐시·잠그고(고품질), 진행 중 꼬리는 최신값으로 빠르게
+    /// 초벌 번역해 회색으로 덧붙인다. 번역은 항상 1개만 in-flight라 세션 충돌이 없다.
     private func kickTranslator() {
         guard translateWorker == nil else { return }
         translateWorker = Task { @MainActor [weak self] in
             guard let self else { return }
-            while self.needsConfirmed || self.needsVolatile {
-                if self.needsConfirmed {
-                    self.needsConfirmed = false
-                    let src = self.confirmedSource
-                    self.lastConfirmedSent = src
-                    if src.isEmpty {
-                        self.confirmedTranslation = ""
-                    } else if let translated = await self.translate(src) {
-                        self.confirmedTranslation = translated
+            while self.needsTranslate {
+                self.needsTranslate = false
+                // 1) 완성 문장: 캐시에 없는 것만 완전한 문장으로 번역(고품질, 1회).
+                for s in self.stableSentences where self.sentenceCache[s] == nil {
+                    if let translated = await self.translate(s) {
+                        self.sentenceCache[s] = translated
+                        self.rebuildConfirmed()
                     }
-                } else if self.needsVolatile {
-                    self.needsVolatile = false
-                    let src = self.volatileSource
-                    self.lastVolatileSent = src
-                    if src.isEmpty {
+                }
+                // 2) 진행 중(회색): 미완성 꼬리를 빠르게 번역.
+                if self.draftSource != self.lastDraftSent {
+                    self.lastDraftSent = self.draftSource
+                    if self.draftSource.isEmpty {
                         self.volatileTranslation = ""
-                    } else if let translated = await self.translate(src) {
+                    } else if let translated = await self.translate(self.draftSource) {
                         self.volatileTranslation = translated
                     }
                 }
             }
             self.translateWorker = nil
         }
+    }
+
+    /// 일본어 텍스트를 문장 종결부호 기준으로 (완성 문장들, 미완성 꼬리)로 나눈다.
+    private static let sentenceEnders: Set<Character> = ["。", "．", "！", "!", "？", "?", "…", "\n"]
+    private static func splitSentences(_ text: String) -> (complete: [String], trailing: String) {
+        var sentences: [String] = []
+        var current = ""
+        for ch in text {
+            current.append(ch)
+            if sentenceEnders.contains(ch) {
+                let s = current.trimmingCharacters(in: .whitespaces)
+                if !s.isEmpty { sentences.append(s) }
+                current = ""
+            }
+        }
+        return (sentences, current.trimmingCharacters(in: .whitespaces))
     }
 
     /// 번역 전 고유명사 치환(이름 정확 출력) → Apple 온디바이스 번역 → 반말 변환.
