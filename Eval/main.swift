@@ -2,6 +2,7 @@ import Foundation
 import AVFAudio
 import CoreMedia
 import Translation
+import FluidAudio
 
 // 자막 파이프라인 오프라인 평가 하니스(.app, LSUIElement).
 // `open -a VtuberEval.app --args <audio> <locale> <out-file>` (TCC 위해 LaunchServices 경유).
@@ -57,6 +58,25 @@ guard !audioPath.isEmpty, let file = try? AVAudioFile(forReading: URL(fileURLWit
 let format = file.processingFormat
 
 let engineArg = args.count >= 5 ? args[4] : "apple"
+
+// VAD 진단 모드: Silero VAD를 직접 돌려 윈도우별 확률/음성판정 통계를 본다.
+if engineArg == "vad" {
+    do {
+        let vad = try await VadManager()
+        let converter = AudioConverter()
+        let samples = try converter.resampleAudioFile(URL(fileURLWithPath: audioPath))
+        let results = try await vad.process(samples)
+        let voiced = results.filter { $0.isVoiceActive }.count
+        let probs = results.map { $0.probability }
+        let mean = probs.isEmpty ? 0 : probs.reduce(0,+)/Float(probs.count)
+        let mx = probs.max() ?? 0
+        log("VAD: windows=\(results.count) voiced=\(voiced) (\(results.isEmpty ? 0 : voiced*100/results.count)%) meanP=\(String(format: "%.2f", mean)) maxP=\(String(format: "%.2f", mx))")
+    } catch {
+        log("VAD load/process FAILED: \(error)")
+    }
+    log("=== DONE ==="); exit(0)
+}
+
 let collector = Collector(log)
 let glossary = GlossaryCorrector()
 let recognizer: SpeechRecognizing = (engineArg == "parakeet") ? FluidParakeetJaRecognizer() : AppleSpeechRecognizer()

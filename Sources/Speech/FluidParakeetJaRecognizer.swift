@@ -2,7 +2,6 @@ import Foundation
 import FluidAudio
 import AVFAudio
 import CoreMedia
-import Accelerate
 
 /// FluidAudio의 Parakeet-TDT Japanese(batch, 온디바이스 CoreML) 기반 인식기.
 /// 정확도가 높은 대신 batch라, 발화를 누적하며 ~1.2초마다 전체를 재인식해 진행 표시하고,
@@ -21,28 +20,21 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
     private var customVocab: CustomVocabularyContext?
     private let converter = AudioConverter()
 
-    private enum FeedEvent { case audio([Float]); case finalize }
+    private enum FeedEvent { case audio([Float]) }
     private var feed: AsyncStream<FeedEvent>.Continuation?
     private var consumer: Task<Void, Never>?
 
+    // 사람 목소리 판정용 Silero VAD(음악·게임소리·노이즈를 발화와 구별 → 무발화 환각 차단의 핵심).
+    private var vad: VadManager?
+
+    private let vadWindowSamples = 4_096             // Silero 모델 네이티브 윈도우(256ms)
     private let transcribeIntervalSamples = 11_200   // ~0.7초마다 진행 재인식(매끄러움·확정속도↑)
-    private let confidenceThreshold = 0.6            // 이 미만(예: 무발화 환각 0.27)은 무시
+    private let confidenceThreshold = 0.6            // 이 미만(저신뢰 환각)은 무시
     private let maxUtteranceSamples = 224_000        // ~14초 안전 상한(모델 윈도우)
-
-    // 라인 클리어용 RMS VAD(append 스레드에서만 접근)
-    private let vadSilenceThreshold: Float = 0.008
-    private let utteranceResetSeconds = 1.5       // 짧은 쉼엔 안 비우고, 발화 단위로 자연스럽게 끊음
-    private var silenceSeconds = 0.0
-    private var finalizeArmed = true
-
-    // 스피치 게이트: 발화 레벨 이하(룸톤/노이즈)는 묵음으로 → 무발화 환각 방지
-    private let speechGateThreshold: Float = 0.012
-    private let gateHangoverSeconds = 0.35
-    private var gateSilence = 0.0
-    private var gateOpen = false
 
     func prewarm(locale: Locale) async {
         _ = try? await AsrModels.downloadAndLoad(version: .tdtJa)
+        vad = try? await VadManager()
         if !vocabulary.isEmpty {
             _ = try? await CtcModels.downloadAndLoad(variant: .ctc110m)
         }
@@ -51,79 +43,71 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
     func start(locale: Locale) async throws {
         let models = try await AsrModels.downloadAndLoad(version: .tdtJa)
         manager = AsrManager(models: models)
+        if vad == nil { vad = try? await VadManager() }
         if !vocabulary.isEmpty { await setupBoosting() }
-
-        silenceSeconds = 0
-        finalizeArmed = true
 
         let (stream, continuation) = AsyncStream<FeedEvent>.makeStream()
         feed = continuation
         consumer = Task { [weak self] in
-            var buffer: [Float] = []
+            var buffer: [Float] = []        // 목소리로 확정된 발화만 누적
             var lastCount = 0
+            var pending: [Float] = []       // VAD 판정 대기(256ms 윈도우로 모아 판정)
+            var vadState = VadStreamState.initial()   // Silero LSTM 상태(연속 유지 필수)
+
             for await event in stream {
                 guard let self, let manager = self.manager else { break }
-                switch event {
-                case .audio(let samples):
-                    buffer.append(contentsOf: samples)
-                    if buffer.count - lastCount >= self.transcribeIntervalSamples {
-                        lastCount = buffer.count
-                        if let r = await self.transcribe(buffer, manager: manager, boost: false),
-                           r.confidence >= self.confidenceThreshold {     // 저신뢰 환각 무시
-                            self.emit(r.text, confirmed: false, confidence: r.confidence)
-                        }
+                guard case .audio(let samples) = event else { continue }
+                pending.append(contentsOf: samples)
+
+                while pending.count >= self.vadWindowSamples {
+                    let window = Array(pending.prefix(self.vadWindowSamples))
+                    pending.removeFirst(self.vadWindowSamples)
+
+                    // 스트리밍 VAD: 상태를 이어가며 목소리 여부 판정(고립 호출 시 콜드 LSTM이
+                    // 가짜 검출하는 문제를 피한다). triggered = Silero 히스테리시스로 안정화된 발화 구간.
+                    var voiced = true                  // VAD 미로드 시 fail-open
+                    if let vad = self.vad,
+                       let r = try? await vad.processStreamingChunk(window, state: vadState) {
+                        vadState = r.state
+                        voiced = r.state.triggered
                     }
-                    if buffer.count >= self.maxUtteranceSamples {
+
+                    if voiced {
+                        buffer.append(contentsOf: window)
+                        if buffer.count - lastCount >= self.transcribeIntervalSamples {
+                            lastCount = buffer.count
+                            if let r = await self.transcribe(buffer, manager: manager, boost: false),
+                               r.confidence >= self.confidenceThreshold {
+                                self.emit(r.text, confirmed: false, confidence: r.confidence)
+                            }
+                        }
+                        if buffer.count >= self.maxUtteranceSamples {
+                            if let r = await self.transcribe(buffer, manager: manager, boost: true),
+                               r.confidence >= self.confidenceThreshold {
+                                self.emit(r.text, confirmed: true, confidence: r.confidence)
+                            }
+                            buffer.removeAll(keepingCapacity: true); lastCount = 0
+                            self.resetLineState()
+                        }
+                    } else if !buffer.isEmpty {
+                        // 발화 종료(VAD가 무음 구간 확인) → 확정 후 비움.
                         if let r = await self.transcribe(buffer, manager: manager, boost: true),
                            r.confidence >= self.confidenceThreshold {
                             self.emit(r.text, confirmed: true, confidence: r.confidence)
                         }
-                        buffer.removeAll(keepingCapacity: true)
-                        lastCount = 0
+                        buffer.removeAll(keepingCapacity: true); lastCount = 0
                         self.resetLineState()
                     }
-                case .finalize:
-                    if !buffer.isEmpty, let r = await self.transcribe(buffer, manager: manager, boost: true),
-                       r.confidence >= self.confidenceThreshold {
-                        self.emit(r.text, confirmed: true, confidence: r.confidence)
-                    }
-                    buffer.removeAll(keepingCapacity: true)
-                    lastCount = 0
-                    self.resetLineState()
+                    // buffer 비어있고 목소리도 없으면 버림(무발화 → 자막 없음).
                 }
             }
         }
     }
 
     func append(_ buffer: AVAudioPCMBuffer, at time: CMTime) {
-        guard let feed, var samples = try? converter.resampleBuffer(buffer) else { return }
-
-        var rms: Float = 1
-        if let channels = buffer.floatChannelData {
-            vDSP_rmsqv(channels[0], 1, &rms, vDSP_Length(buffer.frameLength))
-        }
-        let duration = Double(buffer.frameLength) / buffer.format.sampleRate
-
-        // 발화 레벨 이하 구간은 묵음으로 대체 → 노이즈 환각 방지.
-        if rms >= speechGateThreshold {
-            gateOpen = true; gateSilence = 0
-        } else {
-            gateSilence += duration
-            if gateSilence >= gateHangoverSeconds { gateOpen = false }
-        }
-        if !gateOpen { for i in samples.indices { samples[i] = 0 } }
+        // 16kHz 모노로 리샘플만 하고 흘려보낸다. 발화/무음 판정은 소비자 쪽 VAD가 전담.
+        guard let feed, let samples = try? converter.resampleBuffer(buffer) else { return }
         feed.yield(.audio(samples))
-
-        if rms < vadSilenceThreshold {
-            silenceSeconds += duration
-            if silenceSeconds >= utteranceResetSeconds, finalizeArmed {
-                finalizeArmed = false
-                feed.yield(.finalize)
-            }
-        } else {
-            silenceSeconds = 0
-            finalizeArmed = true
-        }
     }
 
     func stop() async {
@@ -132,6 +116,7 @@ final class FluidParakeetJaRecognizer: SpeechRecognizing {
         consumer?.cancel()
         consumer = nil
         manager = nil
+        vad = nil
         spotter = nil
         rescorer = nil
         customVocab = nil
